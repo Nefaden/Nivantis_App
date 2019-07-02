@@ -1,0 +1,87 @@
+before_script:
+  - npm install
+  - npm install -g npm@latest
+  - npm install -g ionic cordova
+  - npm audit fix
+  - npm rebuild node-sass
+
+stages:
+  - test
+  - build
+  - deploy
+
+# This folder is cached between builds
+cache:
+  paths:
+  - node_modules/
+  
+unit tests:
+  image: weboaks/node-karma-protractor-chrome
+  stage: test
+  script:
+    - npm run lint
+    - npm run test
+    - npm run build
+    #- npm run e2e
+    # Try to solve problem later
+
+build site:
+  image: node:11
+  stage: build
+  script:
+    - npm run build
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - www
+      
+build android:
+  image: kusumoto/docker-ionic-android-sdk
+  stage: build
+  script:
+    - ionic cordova platform rm android
+    - npm i -g cordova-res --unsafe-perm
+    #Need to use another user than root
+    - ionic integrations enable cordova --add
+    - ionic cordova resources android --force
+    - ionic cordova platform add android
+    - ionic cordova build android --verbose
+    - ionic cordova build android --release --verbose
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - "$ARTIFACT_ANDROID"
+
+deploy site:
+  image: alpine
+  stage: deploy
+  only: 
+    - master
+  before_script:
+    - ''
+  script:
+    - apk add --no-cache rsync openssh
+    - mkdir -p ~/.ssh
+    - echo "$SSH_PRIVATE" >> ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+    - echo 'Host scaleway\n\tHostname "$IP_SERVER"\n\tStrictHostKeyChecking accept-new' > ~/.ssh/config
+    - rsync -e "ssh -i $HOME/.ssh/id_rsa -o StrictHostKeyChecking=accept-new" -rav --progress --stats --delete www/ root@"$IP_SERVER":"$DEPLOY_PATH"
+  dependencies:
+    - build site
+    
+deploy android:
+  image: alpine
+  stage: deploy
+  only: 
+    - master
+  before_script:
+    - ''
+  script:
+    - apk add --no-cache rsync openssh
+    - mkdir -p ~/.ssh
+    - echo "$SSH_PRIVATE" >> ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+    - echo 'Host scaleway\n\tHostname "$IP_SERVER"\n\tStrictHostKeyChecking accept-new' > ~/.ssh/config
+    - rsync -e "ssh -i $HOME/.ssh/id_rsa -o StrictHostKeyChecking=accept-new" -rav --progress --stats --delete "$ARTIFACT_ANDROID" root@"$IP_SERVER":"$DEPLOY_AND_PATH"
+  dependencies:
+    - build android
